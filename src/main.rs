@@ -1,63 +1,89 @@
-use async_std::io::{Read, ReadExt, Write};
-use async_std::net::{Ipv4Addr, TcpStream};
-use async_std::os::unix::io::AsRawFd;
 use async_std::task;
-use rust_mqtt::client::client::MqttClient;
-use std::str::from_utf8;
-
-use std::{
-    net::{Ipv4Addr, SocketAddr},
-    time::Duration,
-};
-
-use core::ops::Deref;
-use postcard::{from_bytes, to_slice};
+use bincode::serialize;
+use bincode::ErrorKind;
+use rumqttc::v5::mqttbytes::QoS;
+use rumqttc::v5::{AsyncClient, MqttOptions};
+use rumqttc::v5::{Event, Incoming};
+use rumqttc::Outgoing::Publish;
+use rumqttc::Request;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
+use std::error::Error;
+use std::time::Duration;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Measurments {
     cotwo: u16,
     temp: f32,
     humdt: f32,
 }
 
+impl From<&Measurments> for Vec<u8> {
+    fn from(value: &Measurments) -> Self {
+        bincode::serialize(value).unwrap()
+    }
+}
+
+impl From<Measurments> for Vec<u8> {
+    fn from(value: Measurments) -> Self {
+        bincode::serialize(&value).unwrap()
+    }
+}
+
+impl TryFrom<&[u8]> for Measurments {
+    type Error = Box<ErrorKind>;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        bincode::deserialize(value)
+    }
+}
+
 #[async_std::main]
 async fn main() {
-    // env_logger::init();
+    pretty_env_logger::init();
+    // color_backtrace::install();
 
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let mut buf: [u8; 4096] = [0; 4096];
-    let mut stream = TcpStream::connect("127.0.0.1:8080").await.unwrap();
-    let mut socket = TcpStream::as_raw_fd(&stream);
+    let mut mqttoptions = MqttOptions::new("test-1", "mqtt.local", 1883);
+    mqttoptions.set_keep_alive(Duration::from_secs(5));
 
-    let mut config = ClientConfig::new(
-        rust_mqtt::client::client_config::MqttVersion::MQTTv5,
-        CountingRng(20000),
-    );
-    config.add_max_subscribe_qos(rust_mqtt::packet::v5::publish_packet::QualityOfService::QoS1);
-    config.add_client_id("client");
-    // config.add_username(USERNAME);
-    // config.add_password(PASSWORD);
-    config.max_packet_size = 100;
-    let mut recv_buffer = [0; 80];
-    let mut write_buffer = [0; 80];
-
-    let mut client =
-        MqttClient::<_, 5, _>::new(socket, &mut write_buffer, 80, &mut recv_buffer, 80, config);
-
-    client.connect_to_broker().await.unwrap();
+    let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
+    client.subscribe("sensor_0", QoS::AtMostOnce).await.unwrap();
+    task::spawn(async move {
+        requests(client).await;
+        task::sleep(Duration::from_secs(3)).await;
+    });
 
     loop {
+        let event = eventloop.poll().await;
+        match &event {
+            Ok(v) => match v {
+                Event::Incoming(Incoming::Publish(pay)) => {
+                    println!("Incoming: {:?}", pay.payload)
+                }
+                Event::Incoming(inc) => println!("Incomint any: {:?}", inc),
+                Event::Outgoing(out) => println!("Outgoing: {:?}", out),
+            },
+            Err(e) => {
+                println!("Error = {e:?}");
+                return ();
+            }
+        }
+    }
+}
+
+async fn requests(client: AsyncClient) {
+    loop {
+        let meas = Measurments {
+            cotwo: 11,
+            temp: 2.2,
+            humdt: 3.3,
+        };
+
         client
-            .send_message(
-                "hello",
-                b"hello2",
-                rust_mqtt::packet::v5::publish_packet::QualityOfService::QoS0,
-                true,
-            )
+            .publish("sensor_0", QoS::ExactlyOnce, false, meas)
             .await
             .unwrap();
-        task::sleep(Duration::from_millis(500)).await;
+
+        task::sleep(Duration::from_secs(1)).await;
     }
 }
