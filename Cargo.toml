@@ -17,4 +17,5 @@ postcard = "1.0.0"
 # disabling default-features fixes this
 serde = { version = "1.0.*" }
 async-std = { version = "1.12.0", features=["attributes", "tokio1"]}
+bytes = "1"
 

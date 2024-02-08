@@ -1,15 +1,17 @@
 use async_std::task;
-use bincode::serialize;
 use bincode::ErrorKind;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use rumqttc::v5::mqttbytes::QoS;
 use rumqttc::v5::{AsyncClient, MqttOptions};
 use rumqttc::v5::{Event, Incoming};
 use rumqttc::Outgoing::Publish;
 use rumqttc::Request;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
 use std::error::Error;
-use std::time::Duration;
+
+use std::convert::{Into, TryFrom};
+use std::thread;
+use std::time::{Duration, SystemTime};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Measurments {
@@ -18,15 +20,15 @@ struct Measurments {
     humdt: f32,
 }
 
-impl From<&Measurments> for Vec<u8> {
+impl From<&Measurments> for Bytes {
     fn from(value: &Measurments) -> Self {
-        bincode::serialize(value).unwrap()
+        bincode::serialize(value).unwrap().into()
     }
 }
 
-impl From<Measurments> for Vec<u8> {
+impl From<Measurments> for Bytes {
     fn from(value: Measurments) -> Self {
-        bincode::serialize(&value).unwrap()
+        bincode::serialize(&value).unwrap().into()
     }
 }
 

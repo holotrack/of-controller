@@ -700,6 +700,7 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "bincode",
+ "bytes",
  "log",
  "postcard",
  "pretty_env_logger",
