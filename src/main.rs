@@ -9,6 +9,7 @@ use rumqttc::Request;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
+use postcard::{from_bytes, to_vec};
 use std::convert::{Into, TryFrom};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -81,8 +82,14 @@ async fn requests(client: AsyncClient) {
             humdt: 3.3,
         };
 
+        let output = to_vec(&RefStruct {
+            bytes: &bytes,
+            str_s: message,
+        })
+        .unwrap();
+
         client
-            .publish("sensor_0", QoS::ExactlyOnce, false, meas)
+            .publish("sensor_0", QoS::ExactlyOnce, false, output)
             .await
             .unwrap();
 
