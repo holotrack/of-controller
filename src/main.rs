@@ -82,11 +82,7 @@ async fn requests(client: AsyncClient) {
             humdt: 3.3,
         };
 
-        let output = to_vec(&RefStruct {
-            bytes: &bytes,
-            str_s: message,
-        })
-        .unwrap();
+        let output = to_vec(&meas).unwrap();
 
         client
             .publish("sensor_0", QoS::ExactlyOnce, false, output)
