@@ -1,45 +1,28 @@
 use async_std::task;
 use bincode::ErrorKind;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use of_controller::switch;
 use rumqttc::v5::mqttbytes::QoS;
 use rumqttc::v5::{AsyncClient, MqttOptions};
 use rumqttc::v5::{Event, Incoming};
 use rumqttc::Outgoing::Publish;
 use rumqttc::Request;
-use serde::{Deserialize, Serialize};
+
 use std::error::Error;
 
-use postcard::{from_bytes, to_vec};
+use postcard::{from_bytes, to_stdvec};
 use std::convert::{Into, TryFrom};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Measurments {
-    cotwo: u16,
-    temp: f32,
-    humdt: f32,
-}
+extern crate of_controller;
+use crate::of_controller::switch::SwitchCard;
 
-impl From<&Measurments> for Bytes {
-    fn from(value: &Measurments) -> Self {
-        bincode::serialize(value).unwrap().into()
-    }
-}
-
-impl From<Measurments> for Bytes {
-    fn from(value: Measurments) -> Self {
-        bincode::serialize(&value).unwrap().into()
-    }
-}
-
-impl TryFrom<&[u8]> for Measurments {
-    type Error = Box<ErrorKind>;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        bincode::deserialize(value)
-    }
-}
+// impl Measurments {
+//     fn serialize_postcard(&self) -> Vec<u8> {
+//         to_stdvec(self).unwrap()
+//     }
+// }
 
 #[async_std::main]
 async fn main() {
@@ -76,16 +59,16 @@ async fn main() {
 
 async fn requests(client: AsyncClient) {
     loop {
-        let meas = Measurments {
-            cotwo: 11,
-            temp: 2.2,
-            humdt: 3.3,
-        };
-
-        let output = to_vec(&meas).unwrap();
+        let switch_card = SwitchCard::new();
+        println!("SwitchCard: {:?}", switch_card);
 
         client
-            .publish("sensor_0", QoS::ExactlyOnce, false, output)
+            .publish(
+                "switch_0",
+                QoS::ExactlyOnce,
+                false,
+                to_stdvec(&switch_card).unwrap(),
+            )
             .await
             .unwrap();
 
