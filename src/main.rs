@@ -1,77 +1,174 @@
-use async_std::task;
-use bincode::ErrorKind;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use of_controller::switch;
-use rumqttc::v5::mqttbytes::QoS;
-use rumqttc::v5::{AsyncClient, MqttOptions};
-use rumqttc::v5::{Event, Incoming};
-use rumqttc::Outgoing::Publish;
-use rumqttc::Request;
+use async_std::channel::{self, Sender};
+use async_std::io::{ReadExt, WriteExt};
+use async_std::sync::Mutex;
+use async_std::{net::TcpStream, task};
+use chrono::prelude::*;
+use std::sync::Arc;
+use std::time::Duration;
 
-use std::error::Error;
+extern crate pretty_env_logger;
+#[macro_use]
+extern crate log;
 
-use postcard::{from_bytes, to_stdvec};
-use std::convert::{Into, TryFrom};
-use std::thread;
-use std::time::{Duration, SystemTime};
+use postcard::{from_bytes, to_slice};
 
-extern crate of_controller;
-use crate::of_controller::switch::SwitchCard;
+use of_controller::controller::SwitchStatus;
+use of_controller::scd41::Measurements;
+use of_controller::switch::PortCard;
 
-// impl Measurments {
-//     fn serialize_postcard(&self) -> Vec<u8> {
-//         to_stdvec(self).unwrap()
-//     }
-// }
+const PORTS_AMMOUNT: usize = 6;
+const FAN_PORT: usize = 0;
+const ATOMIZER_PORT: usize = 1;
+const HEAT_PORT: usize = 2;
+const TIMER_PORT: usize = 3;
 
-#[async_std::main]
-async fn main() {
-    pretty_env_logger::init();
-    // color_backtrace::install();
+const MAX_CO2: u16 = 1000;
+// const MIN_CO2: u16 = 500; //not seeing usage of this value
 
-    let mut mqttoptions = MqttOptions::new("test-1", "mqtt.local", 1883);
-    mqttoptions.set_keep_alive(Duration::from_secs(5));
+const MAX_TEMP: f32 = 26_f32;
+const MIN_TEMP: f32 = 18_f32;
 
-    let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
-    client.subscribe("sensor_0", QoS::AtMostOnce).await.unwrap();
-    task::spawn(async move {
-        requests(client).await;
-        task::sleep(Duration::from_secs(3)).await;
-    });
+const MAX_HMDT: f32 = 95_f32;
+const MIN_HMDT: f32 = 80_f32;
 
+// const LIGHT_ON:
+
+async fn scd41_read(addr: &str, tx: Sender<Measurements>) -> ! {
     loop {
-        let event = eventloop.poll().await;
-        match &event {
-            Ok(v) => match v {
-                Event::Incoming(Incoming::Publish(pay)) => {
-                    println!("Incoming: {:?}", pay.payload)
+        task::sleep(Duration::from_millis(1000)).await;
+
+        match TcpStream::connect(addr).await {
+            Ok(mut stream) => {
+                info!("Successfully connected to server in port 1234");
+
+                let mut data = [0u8; 12]; // using 12 byte buffer
+
+                match stream.read(&mut data).await {
+                    Ok(_) => {
+                        let measurements: Measurements = from_bytes(&data).unwrap();
+
+                        info!("Measurements from sensor: {:?}", measurements);
+                        tx.send(measurements).await.unwrap();
+                    }
+
+                    Err(e) => {
+                        error!("Failed to receive data: {}", e);
+                    }
                 }
-                Event::Incoming(inc) => println!("Incomint any: {:?}", inc),
-                Event::Outgoing(out) => println!("Outgoing: {:?}", out),
-            },
-            Err(e) => {
-                println!("Error = {e:?}");
-                return ();
             }
+            Err(e) => {
+                error!("SCD41 failed to connect: {}", e);
+            }
+        }
+        info!("SCD41 read finished.");
+    }
+}
+
+async fn swtich_write(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) -> ! {
+    loop {
+        let mut buf: [u8; 4096] = [0; 4096];
+        task::sleep(Duration::from_secs(1)).await;
+
+        let mut switch_status = mutex.lock().await;
+        if switch_status.is_updated() {
+            for (index, port) in switch_status.ports().iter_mut().enumerate() {
+                if port.is_updated() {
+                    match TcpStream::connect(addr).await {
+                        Ok(mut stream) => {
+                            info!("Successfully connected to server in port 1234");
+                            debug!("Setting port: {} to {:?}", index, port.status());
+
+                            let switch_card = PortCard::new(index, port.status(), None);
+
+                            let data = to_slice(&switch_card, &mut buf).unwrap();
+
+                            match stream.write_all(data).await {
+                                Ok(()) => {
+                                    info!(
+                                        "Switch pin: {} set to: {:?}",
+                                        switch_card.port, switch_card.state
+                                    );
+                                    port.sent();
+                                }
+                                Err(e) => {
+                                    error!("write error: {:?}", e);
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            error!("Switch failed to connect: {}", e);
+                        }
+                    }
+                    info!("Switch write finished.");
+                } else {
+                    debug!("Port #{} not for update", index);
+                }
+            }
+        } else {
+            info!("Nothing to do with switch");
         }
     }
 }
 
-async fn requests(client: AsyncClient) {
+#[async_std::main]
+async fn main() {
+    pretty_env_logger::init();
+
+    let switch = SwitchStatus::new(PORTS_AMMOUNT);
+    debug!("Switch default: {:?}", switch);
+
+    let switch_mutex: Arc<Mutex<SwitchStatus>> = Arc::new(Mutex::new(switch));
+
+    let (sender, receiver) = channel::unbounded();
+
+    let switch_spawn_mutex = switch_mutex.clone();
+
+    task::spawn(async move { scd41_read("192.168.1.154:1234", sender).await });
+    task::spawn(async move { swtich_write("192.168.1.138:1234", switch_spawn_mutex).await });
+
+    let switch_main_mutex = switch_mutex.clone();
+
     loop {
-        let switch_card = SwitchCard::new();
-        println!("SwitchCard: {:?}", switch_card);
-
-        client
-            .publish(
-                "switch_0",
-                QoS::ExactlyOnce,
-                false,
-                to_stdvec(&switch_card).unwrap(),
-            )
-            .await
-            .unwrap();
-
         task::sleep(Duration::from_secs(1)).await;
+
+        let measurments = receiver.recv().await.unwrap();
+
+        info!("Recived: {:?}", measurments);
+        let mut switch_status = switch_main_mutex.lock().await;
+
+        let time_on = NaiveTime::from_hms_opt(00, 00, 00).unwrap();
+        let time_off = NaiveTime::from_hms_opt(00, 18, 00).unwrap();
+        let time_now = Local::now().naive_local().time();
+
+        info!("Now is {time_now} imer set to start lights on {time_on} and turn off at {time_off}");
+
+        if time_now >= time_on && time_now <= time_off {
+            switch_status.set_port_on(TIMER_PORT);
+        } else {
+            switch_status.set_port_off(TIMER_PORT);
+        }
+
+        // MAXES - turn on/off can be moved to separate functions
+        if measurments.cotwo > MAX_CO2
+            || measurments.temp > MAX_TEMP
+            || measurments.humdt > MAX_HMDT
+        {
+            switch_status.set_port_on(FAN_PORT);
+        } else {
+            switch_status.set_port_off(FAN_PORT);
+        }
+
+        // MAXES - turn on/off can be moved to separate functions
+        if measurments.temp < MIN_TEMP {
+            switch_status.set_port_on(HEAT_PORT);
+        } else {
+            switch_status.set_port_off(HEAT_PORT);
+        }
+
+        if measurments.temp < MIN_HMDT {
+            switch_status.set_port_on(ATOMIZER_PORT);
+        } else {
+            switch_status.set_port_off(ATOMIZER_PORT);
+        }
     }
 }

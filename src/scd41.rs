@@ -1,13 +1,8 @@
-pub struct SCD41 {
-    addr: u16,
-    i2c: I2c<'static, I2C1, Async>,
+use serde::{Deserialize, Serialize};
 
-    co2: u16,
-    crc_co2: u8,
-
-    temperature: u16,
-    crc_temperature: u8,
-
-    humidity: u16,
-    crc_humidity: u8,
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct Measurements {
+    pub cotwo: u16,
+    pub temp: f32,
+    pub humdt: f32,
 }
