@@ -67,7 +67,6 @@ async fn scd41_read(addr: &str, tx: Sender<Measurements>) -> ! {
 async fn swtich_write(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) -> ! {
     loop {
         let mut buf: [u8; 4096] = [0; 4096];
-        task::sleep(Duration::from_secs(1)).await;
 
         let mut switch_status = mutex.lock().await;
         if switch_status.is_updated() {
@@ -137,7 +136,7 @@ async fn main() {
         let mut switch_status = switch_main_mutex.lock().await;
 
         let time_on = NaiveTime::from_hms_opt(00, 00, 00).unwrap();
-        let time_off = NaiveTime::from_hms_opt(00, 18, 00).unwrap();
+        let time_off = NaiveTime::from_hms_opt(00, 40, 00).unwrap();
         let time_now = Local::now().naive_local().time();
 
         info!("Now is {time_now} imer set to start lights on {time_on} and turn off at {time_off}");
