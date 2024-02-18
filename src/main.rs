@@ -1,6 +1,6 @@
 use async_std::channel::{self, Sender};
 use async_std::io::{ReadExt, WriteExt};
-use async_std::sync::Mutex;
+use async_std::sync::{Mutex, MutexGuard};
 use async_std::{net::TcpStream, task};
 use chrono::prelude::*;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use postcard::{from_bytes, to_slice};
 
 use of_controller::controller::SwitchStatus;
 use of_controller::scd41::Measurements;
-use of_controller::switch::PortCard;
+use of_controller::switch::{Message, PortCard};
 
 const PORTS_AMMOUNT: usize = 6;
 const FAN_PORT: usize = 0;
@@ -64,8 +64,71 @@ async fn scd41_read(addr: &str, tx: Sender<Measurements>) -> ! {
     }
 }
 
+async fn switch_status_update(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) {
+    let mut buf: [u8; 4096] = [0; 4096];
+    let mut read: [u8; 1024] = [0; 1024];
+
+    let mut switch_status = mutex.lock().await;
+    for (index, port) in switch_status.ports().iter_mut().enumerate() {
+        match TcpStream::connect(addr).await {
+            Ok(mut stream) => {
+                info!("Successfully connected to server in port 1234");
+                debug!("Setting status of port: {} to {:?}", index, port.status());
+
+                let message =
+                    Message::GetPortStatus(Some(PortCard::new(index, port.status(), None)));
+
+                let data = to_slice(&message, &mut buf).unwrap();
+
+                match stream.write_all(data).await {
+                    Ok(()) => {
+                        info!("Written request for pin stats");
+                        // task::sleep(Duration::from_millis(1000)).await;
+
+                        //next line never success
+                        loop {
+                            match stream.read(&mut read).await {
+                                Ok(_) => {
+                                    debug!("Status update recived: {read:?}");
+                                    let message: Message = postcard::from_bytes(&read).unwrap();
+                                    if let Message::GetPortStatus(port_card) = message {
+                                        let card = port_card.unwrap();
+                                        info!(
+                                            "Set status on pin: {} to: {:?}",
+                                            card.port, card.state
+                                        );
+
+                                        // port.sent();
+                                    } else {
+                                        debug!("IT SHOULD NEVER HAPPEN");
+                                        info!("{message:?}");
+                                    }
+                                    break;
+                                }
+                                Err(e) => {
+                                    error!("Pin remote status read error: {:?}", e);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Pin status update write error: {:?}", e);
+                    }
+                };
+            }
+            Err(e) => {
+                error!("Update status failed to connect to switch: {}", e);
+            }
+        }
+        info!("Pin status update finished");
+    }
+}
+
 async fn swtich_write(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) -> ! {
     loop {
+        task::sleep(Duration::from_secs(1)).await;
+
         let mut buf: [u8; 4096] = [0; 4096];
 
         let mut switch_status = mutex.lock().await;
@@ -77,17 +140,22 @@ async fn swtich_write(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) -> ! {
                             info!("Successfully connected to server in port 1234");
                             debug!("Setting port: {} to {:?}", index, port.status());
 
-                            let switch_card = PortCard::new(index, port.status(), None);
+                            let message =
+                                Message::SetPort(PortCard::new(index, port.status(), None));
 
-                            let data = to_slice(&switch_card, &mut buf).unwrap();
+                            let data = to_slice(&message, &mut buf).unwrap();
 
                             match stream.write_all(data).await {
                                 Ok(()) => {
-                                    info!(
-                                        "Switch pin: {} set to: {:?}",
-                                        switch_card.port, switch_card.state
-                                    );
-                                    port.sent();
+                                    if let Message::SetPort(port_card) = message {
+                                        info!(
+                                            "Switch pin: {} set to: {:?}",
+                                            port_card.port, port_card.state
+                                        );
+                                        port.sent();
+                                    } else {
+                                        debug!("IT SHOULD NEVER HAPPEN");
+                                    }
                                 }
                                 Err(e) => {
                                     error!("write error: {:?}", e);
@@ -98,13 +166,13 @@ async fn swtich_write(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) -> ! {
                             error!("Switch failed to connect: {}", e);
                         }
                     }
-                    info!("Switch write finished.");
+                    info!("Pin write finished.");
                 } else {
                     debug!("Port #{} not for update", index);
                 }
             }
         } else {
-            info!("Nothing to do with switch");
+            info!("Nothing to do with switch pin setup");
         }
     }
 }
@@ -119,6 +187,9 @@ async fn main() {
     let switch_mutex: Arc<Mutex<SwitchStatus>> = Arc::new(Mutex::new(switch));
 
     let (sender, receiver) = channel::unbounded();
+
+    let switch_update_mutex = switch_mutex.clone();
+    switch_status_update("192.168.1.138:1234", switch_update_mutex).await;
 
     let switch_spawn_mutex = switch_mutex.clone();
 

@@ -27,3 +27,10 @@ impl PortCard {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+
+pub enum Message {
+    SetPort(PortCard),
+    GetPortStatus(Option<PortCard>),
+}
