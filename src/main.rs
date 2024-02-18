@@ -14,7 +14,7 @@ use postcard::{from_bytes, to_slice};
 
 use of_controller::controller::SwitchStatus;
 use of_controller::scd41::Measurements;
-use of_controller::switch::{Message, PortCard};
+use of_controller::switch::{Message, PortCard, State};
 
 const PORTS_AMMOUNT: usize = 6;
 const FAN_PORT: usize = 0;
@@ -66,61 +66,63 @@ async fn scd41_read(addr: &str, tx: Sender<Measurements>) -> ! {
 
 async fn switch_status_update(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) {
     let mut buf: [u8; 4096] = [0; 4096];
-    let mut read: [u8; 1024] = [0; 1024];
+    let mut read: [u8; 10] = [0; 10];
 
     let mut switch_status = mutex.lock().await;
-    for (index, port) in switch_status.ports().iter_mut().enumerate() {
+
+    loop {
         match TcpStream::connect(addr).await {
             Ok(mut stream) => {
-                info!("Successfully connected to server in port 1234");
-                debug!("Setting status of port: {} to {:?}", index, port.status());
-                let message =
-                    Message::GetPortStatus(Some(PortCard::new(index, port.status(), None)));
+                for (index, port) in switch_status.ports().iter_mut().enumerate() {
+                    info!("Successfully connected to server in port 1234");
+                    let message =
+                        Message::GetPortStatus(Some(PortCard::new(index, port.status(), None)));
 
-                let data = to_slice(&message, &mut buf).unwrap();
+                    let data = to_slice(&message, &mut buf).unwrap();
 
-                match stream.write_all(data).await {
-                    Ok(()) => {
-                        info!("Written request for pin stats");
-                        // task::sleep(Duration::from_millis(1000)).await;
-                        //next line never success
-                        match stream.read(&mut read).await {
-                            Ok(_) => {
-                                debug!("Status update recived: {read:?}");
-                                let message: Message = postcard::from_bytes(&read).unwrap();
-                                if let Message::GetPortStatus(port_card) = message {
-                                    if let Some(card) = port_card {
-                                        info!(
-                                            "Set status on pin: {} to: {:?}",
-                                            card.port, card.state
-                                        );
+                    match stream.write_all(data).await {
+                        Ok(()) => {
+                            info!("Written request for pin stats");
+                            match stream.read(&mut read).await {
+                                Ok(_) => {
+                                    debug!("Status update recived: {read:?}");
+                                    let message: Message = postcard::from_bytes(&read).unwrap();
+                                    if let Message::GetPortStatus(port_card) = message {
+                                        if let Some(card) = port_card {
+                                            match card.state {
+                                                State::On => port.status_on(),
+                                                State::Off => port.status_off(),
+                                            }
+                                            info!(
+                                                "Set status on pin: {} to: {:?}",
+                                                card.port, card.state
+                                            );
+                                        } else {
+                                            info!("After ask for status of pin recived None");
+                                        }
+
+                                        // port.sent();
                                     } else {
-                                        info!("After ask for status of pin recived None");
+                                        debug!("IT SHOULD NEVER HAPPEN");
+                                        info!("{message:?}");
                                     }
-
-                                    // port.sent();
-                                } else {
-                                    debug!("IT SHOULD NEVER HAPPEN");
-                                    info!("{message:?}");
                                 }
-                                break;
-                            }
-                            Err(e) => {
-                                error!("Pin remote status read error: {:?}", e);
-                                continue;
+                                Err(e) => {
+                                    error!("Pin remote status read error: {:?}", e);
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        error!("Pin status update write error: {:?}", e);
-                    }
-                };
+                        Err(e) => {
+                            error!("Pin status update write error: {:?}", e);
+                        }
+                    };
+                }
+                break;
             }
             Err(e) => {
-                error!("Update status failed to connect to switch: {}", e);
+                error!("Update status failed on connect to switch: {}", e);
             }
         }
-        info!("Pin status update finished");
     }
 }
 
@@ -189,6 +191,7 @@ async fn main() {
 
     let switch_update_mutex = switch_mutex.clone();
     switch_status_update("192.168.1.138:1234", switch_update_mutex).await;
+    debug!("Switch status after update: {:?}", switch_mutex);
 
     let switch_spawn_mutex = switch_mutex.clone();
 
