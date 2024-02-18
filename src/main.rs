@@ -74,7 +74,6 @@ async fn switch_status_update(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) {
             Ok(mut stream) => {
                 info!("Successfully connected to server in port 1234");
                 debug!("Setting status of port: {} to {:?}", index, port.status());
-
                 let message =
                     Message::GetPortStatus(Some(PortCard::new(index, port.status(), None)));
 
@@ -84,31 +83,31 @@ async fn switch_status_update(addr: &str, mutex: Arc<Mutex<SwitchStatus>>) {
                     Ok(()) => {
                         info!("Written request for pin stats");
                         // task::sleep(Duration::from_millis(1000)).await;
-
                         //next line never success
-                        loop {
-                            match stream.read(&mut read).await {
-                                Ok(_) => {
-                                    debug!("Status update recived: {read:?}");
-                                    let message: Message = postcard::from_bytes(&read).unwrap();
-                                    if let Message::GetPortStatus(port_card) = message {
-                                        let card = port_card.unwrap();
+                        match stream.read(&mut read).await {
+                            Ok(_) => {
+                                debug!("Status update recived: {read:?}");
+                                let message: Message = postcard::from_bytes(&read).unwrap();
+                                if let Message::GetPortStatus(port_card) = message {
+                                    if let Some(card) = port_card {
                                         info!(
                                             "Set status on pin: {} to: {:?}",
                                             card.port, card.state
                                         );
-
-                                        // port.sent();
                                     } else {
-                                        debug!("IT SHOULD NEVER HAPPEN");
-                                        info!("{message:?}");
+                                        info!("After ask for status of pin recived None");
                                     }
-                                    break;
+
+                                    // port.sent();
+                                } else {
+                                    debug!("IT SHOULD NEVER HAPPEN");
+                                    info!("{message:?}");
                                 }
-                                Err(e) => {
-                                    error!("Pin remote status read error: {:?}", e);
-                                    continue;
-                                }
+                                break;
+                            }
+                            Err(e) => {
+                                error!("Pin remote status read error: {:?}", e);
+                                continue;
                             }
                         }
                     }
