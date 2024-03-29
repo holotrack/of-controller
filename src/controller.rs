@@ -34,6 +34,20 @@ impl SwitchStatus {
         &mut self.ports
     }
 
+    pub fn is_port_on(&mut self, port: usize) -> bool {
+        match self.ports[port].status {
+            State::On => true,
+            State::Off => false,
+        }
+    }
+
+    pub fn is_port_off(&mut self, port: usize) -> bool {
+        match self.ports[port].status {
+            State::On => false,
+            State::Off => true,
+        }
+    }
+
     pub fn set_port_on(&mut self, port: usize) {
         match self.ports[port].status {
             State::On => info!("Port {port} already setup to On status"),
