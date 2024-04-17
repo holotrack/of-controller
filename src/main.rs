@@ -23,14 +23,14 @@ const ATOMIZER_PORT: usize = 1;
 const HEAT_PORT: usize = 2;
 const TIMER_PORT: usize = 3;
 
-const MAX_CO2: u16 = 1000;
+const MAX_CO2: u16 = 800;
 // const MIN_CO2: u16 = 500; //not seeing usage of this value
 
-const MAX_TEMP: f32 = 26_f32;
-const MIN_TEMP: f32 = 17_f32;
+const MAX_TEMP: f32 = 21_f32; // + 2 degree
+const MIN_TEMP: f32 = 20_f32; // + 2 degree
 
-const MAX_HMDT: f32 = 95_f32;
-const MIN_HMDT: f32 = 20_f32;
+// const MAX_HMDT: f32 = 90_f32;
+const MIN_HMDT: f32 = 86_f32;
 
 // const LIGHT_ON:
 
@@ -259,19 +259,19 @@ async fn main() {
     loop {
         task::sleep(Duration::from_secs(1)).await;
 
+        let mut switch_status = switch_main_mutex.lock().await;
+        switch_status.set_port_on(4); //zablokowane poki nie bedzie unlock to nie wysle do switcha
+        switch_status.set_port_on(5); // j/w
+
         let measurments = receiver.recv().await.unwrap();
 
         info!("Recived: {:?}", measurments);
-        let mut switch_status = switch_main_mutex.lock().await;
 
-        let time_on = NaiveTime::from_hms_opt(00, 00, 00).unwrap();
-        let time_off = NaiveTime::from_hms_opt(13, 51, 00).unwrap();
+        let time_on = NaiveTime::from_hms_opt(10, 00, 00).unwrap();
+        let time_off = NaiveTime::from_hms_opt(22, 00, 00).unwrap();
         let time_now = Local::now().naive_local().time();
 
         info!("Now is {time_now} imer set to start lights on {time_on} and turn off at {time_off}");
-
-        switch_status.set_port_on(4);
-        switch_status.set_port_on(5);
 
         if time_now >= time_on && time_now <= time_off {
             switch_status.set_port_on(TIMER_PORT);
@@ -279,7 +279,7 @@ async fn main() {
             switch_status.set_port_off(TIMER_PORT);
         }
 
-        if measurments.temp < MIN_HMDT {
+        if measurments.humdt < MIN_HMDT {
             switch_status.set_port_on(ATOMIZER_PORT);
         } else {
             switch_status.set_port_off(ATOMIZER_PORT);
@@ -288,7 +288,7 @@ async fn main() {
         // MAXES - turn on/off can be moved to separate functions
         if measurments.cotwo > MAX_CO2
             || measurments.temp > MAX_TEMP
-            || measurments.humdt > MAX_HMDT
+            // || measurments.humdt > MAX_HMDT
             || switch_status.is_port_on(ATOMIZER_PORT)
         {
             switch_status.set_port_on(FAN_PORT);
